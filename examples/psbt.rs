@@ -1,3 +1,4 @@
+use bitcoin::Blockchain;
 use bitcoin::consensus::encode::deserialize;
 use bitcoin::hashes::hex::FromHex;
 use miniscript::psbt::PsbtExt;
@@ -14,7 +15,7 @@ fn main() {
     let secp = bitcoin::secp256k1::Secp256k1::verification_only();
     // Assuming all partial sigs are filled in.
     // Construct a generic finalizer
-    psbt.finalize_mut(&secp).unwrap();
+    psbt.finalize_mut(&secp, Blockchain::Bitcoin).unwrap();
     // println!("{:?}", psbt);
 
     assert_eq!(psbt, expected_finalized_psbt);

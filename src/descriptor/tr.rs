@@ -8,7 +8,7 @@ use bitcoin::util::taproot::{
     LeafVersion, TaprootBuilder, TaprootSpendInfo, TAPROOT_CONTROL_BASE_SIZE,
     TAPROOT_CONTROL_MAX_NODE_COUNT, TAPROOT_CONTROL_NODE_SIZE,
 };
-use bitcoin::{secp256k1, Address, Network, Script};
+use bitcoin::{secp256k1, Address, Network, Script, Blockchain};
 use sync::Arc;
 
 use super::checksum::{self, verify_checksum};
@@ -302,9 +302,9 @@ impl<Pk: MiniscriptKey + ToPublicKey> Tr<Pk> {
     }
 
     /// Obtains the corresponding address for this descriptor.
-    pub fn address(&self, network: Network) -> Address {
+    pub fn address(&self, network: Network, chain: Blockchain) -> Address {
         let spend_info = self.spend_info();
-        Address::p2tr_tweaked(spend_info.output_key(), network)
+        Address::p2tr_tweaked(spend_info.output_key(), network, chain)
     }
 
     /// Returns satisfying non-malleable witness and scriptSig with minimum

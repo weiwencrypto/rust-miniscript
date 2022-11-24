@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use bitcoin::consensus::serialize;
 use bitcoin::util::sighash::SighashCache;
-use bitcoin::{PackedLockTime, PrivateKey};
+use bitcoin::{Blockchain, PackedLockTime, PrivateKey};
 use bitcoind::bitcoincore_rpc::jsonrpc::base64;
 use bitcoind::bitcoincore_rpc::RawTx;
 use miniscript::bitcoin::consensus::encode::deserialize;
@@ -25,11 +25,11 @@ fn main() {
     assert!(bridge_descriptor.sanity_check().is_ok());
     println!(
         "Bridge pubkey script: {}",
-        bridge_descriptor.script_pubkey()
+        bridge_descriptor.script_pubkey(Blockchain::Bitcoin)
     );
     println!(
         "Bridge address: {}",
-        bridge_descriptor.address(Network::Regtest).unwrap()
+        bridge_descriptor.address(Network::Regtest, Blockchain::Bitcoin).unwrap()
     );
     println!(
         "Weight for witness satisfaction cost {}",
@@ -96,7 +96,7 @@ fn main() {
 
     let amount = 100000000;
 
-    let (outpoint, witness_utxo) = get_vout(&depo_tx, bridge_descriptor.script_pubkey());
+    let (outpoint, witness_utxo) = get_vout(&depo_tx, bridge_descriptor.script_pubkey(Blockchain::Bitcoin));
 
     let mut txin = TxIn::default();
     txin.previous_output = outpoint;
@@ -110,7 +110,7 @@ fn main() {
     });
 
     psbt.unsigned_tx.output.push(TxOut {
-        script_pubkey: bridge_descriptor.script_pubkey(),
+        script_pubkey: bridge_descriptor.script_pubkey(Blockchain::Bitcoin),
         value: amount * 4 / 5,
     });
 
@@ -118,7 +118,7 @@ fn main() {
 
     let mut input = psbt::Input::default();
     input
-        .update_with_descriptor_unchecked(&bridge_descriptor)
+        .update_with_descriptor_unchecked(&bridge_descriptor, Blockchain::Bitcoin)
         .unwrap();
 
     input.witness_utxo = Some(witness_utxo.clone());
@@ -161,7 +161,7 @@ fn main() {
     let serialized = serialize(&psbt);
     println!("{}", base64::encode(&serialized));
 
-    psbt.finalize_mut(&secp256k1).unwrap();
+    psbt.finalize_mut(&secp256k1, Blockchain::Bitcoin).unwrap();
     println!("{:#?}", psbt);
 
     let tx = psbt.extract_tx();

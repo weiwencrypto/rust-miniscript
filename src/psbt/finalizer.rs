@@ -19,19 +19,20 @@
 //! `https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki`
 //!
 
+use bitcoin::{self, Blockchain, PublicKey, Script, TxOut};
 use bitcoin::blockdata::witness::Witness;
 use bitcoin::secp256k1::{self, Secp256k1};
 use bitcoin::util::key::XOnlyPublicKey;
 use bitcoin::util::sighash::Prevouts;
 use bitcoin::util::taproot::LeafVersion;
-use bitcoin::{self, PublicKey, Script, TxOut};
 
-use super::{sanity_check, Error, InputError, Psbt, PsbtInputSatisfier};
+use crate::{
+    BareCtx, Descriptor, ExtParams, interpreter, Legacy, Miniscript, Satisfier, Segwitv0, Tap,
+};
 use crate::prelude::*;
 use crate::util::witness_size;
-use crate::{
-    interpreter, BareCtx, Descriptor, ExtParams, Legacy, Miniscript, Satisfier, Segwitv0, Tap,
-};
+
+use super::{Error, InputError, Psbt, PsbtInputSatisfier, sanity_check};
 
 // Satisfy the taproot descriptor. It is not possible to infer the complete
 // descriptor from psbt because the information about all the scripts might not
@@ -46,14 +47,14 @@ fn construct_tap_witness(
 
     // try the key spend path first
     if let Some(sig) =
-        <PsbtInputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(sat)
+    <PsbtInputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(sat)
     {
         return Ok(vec![sig.to_vec()]);
     }
     // Next script spends
     let (mut min_wit, mut min_wit_len) = (None, None);
     if let Some(block_map) =
-        <PsbtInputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(sat)
+    <PsbtInputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(sat)
     {
         for (control_block, (script, ver)) in block_map {
             if *ver != LeafVersion::TapScript {
@@ -133,7 +134,7 @@ pub(super) fn prevouts(psbt: &Psbt) -> Result<Vec<&bitcoin::TxOut>, super::Error
 // We parse the insane version while satisfying because
 // we want to move the script is probably already created
 // and we want to satisfy it in any way possible.
-fn get_descriptor(psbt: &Psbt, index: usize) -> Result<Descriptor<PublicKey>, InputError> {
+fn get_descriptor(psbt: &Psbt, chain: Blockchain, index: usize) -> Result<Descriptor<PublicKey>, InputError> {
     // Figure out Scriptpubkey
     let script_pubkey = get_scriptpubkey(psbt, index)?;
     let inp = &psbt.inputs[index];
@@ -154,7 +155,7 @@ fn get_descriptor(psbt: &Psbt, index: usize) -> Result<Descriptor<PublicKey>, In
             // Partial sigs loses the compressed flag that is necessary
             // TODO: See https://github.com/rust-bitcoin/rust-bitcoin/pull/836
             // The type checker will fail again after we update to 0.28 and this can be removed
-            let addr = bitcoin::Address::p2pkh(&pk, bitcoin::Network::Bitcoin);
+            let addr = bitcoin::Address::p2pkh(&pk, bitcoin::Network::Bitcoin, chain);
             *script_pubkey == addr.script_pubkey()
         });
         match partial_sig_contains_pk {
@@ -166,7 +167,7 @@ fn get_descriptor(psbt: &Psbt, index: usize) -> Result<Descriptor<PublicKey>, In
         let partial_sig_contains_pk = inp.partial_sigs.iter().find(|&(&pk, _sig)| {
             // Indirect way to check the equivalence of pubkey-hashes.
             // Create a pubkey hash and check if they are the same.
-            let addr = bitcoin::Address::p2wpkh(&pk, bitcoin::Network::Bitcoin)
+            let addr = bitcoin::Address::p2wpkh(&pk, bitcoin::Network::Bitcoin, chain)
                 .expect("Address corresponding to valid pubkey");
             *script_pubkey == addr.script_pubkey()
         });
@@ -224,7 +225,7 @@ fn get_descriptor(psbt: &Psbt, index: usize) -> Result<Descriptor<PublicKey>, In
                 } else if redeem_script.is_v0_p2wpkh() {
                     // 6. `ShWpkh` case
                     let partial_sig_contains_pk = inp.partial_sigs.iter().find(|&(&pk, _sig)| {
-                        let addr = bitcoin::Address::p2wpkh(&pk, bitcoin::Network::Bitcoin)
+                        let addr = bitcoin::Address::p2wpkh(&pk, bitcoin::Network::Bitcoin, chain)
                             .expect("Address corresponding to valid pubkey");
                         *redeem_script == addr.script_pubkey()
                     });
@@ -332,28 +333,31 @@ fn interpreter_inp_check<C: secp256k1::Verification, T: Borrow<TxOut>>(
 pub fn finalize<C: secp256k1::Verification>(
     psbt: &mut Psbt,
     secp: &Secp256k1<C>,
+    chain: Blockchain,
 ) -> Result<(), super::Error> {
-    finalize_helper(psbt, secp, false)
+    finalize_helper(psbt, secp, false, chain)
 }
 
 /// Same as [finalize], but allows for malleable satisfactions
 pub fn finalize_mall<C: secp256k1::Verification>(
     psbt: &mut Psbt,
     secp: &Secp256k1<C>,
+    chain: Blockchain,
 ) -> Result<(), super::Error> {
-    finalize_helper(psbt, secp, true)
+    finalize_helper(psbt, secp, true, chain)
 }
 
 pub fn finalize_helper<C: secp256k1::Verification>(
     psbt: &mut Psbt,
     secp: &Secp256k1<C>,
     allow_mall: bool,
+    chain: Blockchain,
 ) -> Result<(), super::Error> {
     sanity_check(psbt)?;
 
     // Actually construct the witnesses
     for index in 0..psbt.inputs.len() {
-        finalize_input(psbt, index, secp, allow_mall)?;
+        finalize_input(psbt, index, secp, allow_mall, chain)?;
     }
     // Interpreter is already run inside finalize_input for each input
     Ok(())
@@ -366,6 +370,7 @@ fn finalize_input_helper<C: secp256k1::Verification>(
     index: usize,
     secp: &Secp256k1<C>,
     allow_mall: bool,
+    chain: Blockchain,
 ) -> Result<(Witness, Script), super::Error> {
     let (witness, script_sig) = {
         let spk = get_scriptpubkey(psbt, index).map_err(|e| Error::InputError(e, index))?;
@@ -378,16 +383,16 @@ fn finalize_input_helper<C: secp256k1::Verification>(
             (wit, Script::new())
         } else {
             // Get a descriptor for this input.
-            let desc = get_descriptor(psbt, index).map_err(|e| Error::InputError(e, index))?;
+            let desc = get_descriptor(psbt, chain, index).map_err(|e| Error::InputError(e, index))?;
 
             //generate the satisfaction witness and scriptsig
             let sat = PsbtInputSatisfier::new(psbt, index);
             if !allow_mall {
-                desc.get_satisfaction(sat)
+                desc.get_satisfaction(sat, chain)
             } else {
-                desc.get_satisfaction_mall(sat)
+                desc.get_satisfaction_mall(sat, chain)
             }
-            .map_err(|e| Error::InputError(InputError::MiniscriptError(e), index))?
+                .map_err(|e| Error::InputError(InputError::MiniscriptError(e), index))?
         }
     };
 
@@ -404,8 +409,9 @@ pub(super) fn finalize_input<C: secp256k1::Verification>(
     index: usize,
     secp: &Secp256k1<C>,
     allow_mall: bool,
+    chain: Blockchain,
 ) -> Result<(), super::Error> {
-    let (witness, script_sig) = finalize_input_helper(psbt, index, secp, allow_mall)?;
+    let (witness, script_sig) = finalize_input_helper(psbt, index, secp, allow_mall, chain)?;
 
     // Now mutate the psbt input. Note that we cannot error after this point.
     // If the input is mutated, it means that the finalization succeeded.
@@ -428,13 +434,13 @@ pub(super) fn finalize_input<C: secp256k1::Verification>(
         input.redeem_script = None; // 0x04
         input.witness_script = None; // 0x05
         input.bip32_derivation.clear(); // 0x05
-                                        // finalized witness 0x06 and 0x07 are not clear
-                                        // 0x09 Proof of reserves not yet supported
+        // finalized witness 0x06 and 0x07 are not clear
+        // 0x09 Proof of reserves not yet supported
         input.ripemd160_preimages.clear(); // 0x0a
         input.sha256_preimages.clear(); // 0x0b
         input.hash160_preimages.clear(); // 0x0c
         input.hash256_preimages.clear(); // 0x0d
-                                         // psbt v2 fields till 0x012 not supported
+        // psbt v2 fields till 0x012 not supported
         input.tap_key_sig = None; // 0x013
         input.tap_script_sigs.clear(); // 0x014
         input.tap_scripts.clear(); // 0x015
@@ -448,18 +454,20 @@ pub(super) fn finalize_input<C: secp256k1::Verification>(
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::Blockchain;
     use bitcoin::consensus::encode::deserialize;
     use bitcoin::hashes::hex::FromHex;
 
-    use super::*;
     use crate::psbt::PsbtExt;
+
+    use super::*;
 
     #[test]
     fn tests_from_bip174() {
         let mut psbt: bitcoin::util::psbt::PartiallySignedTransaction = deserialize(&Vec::<u8>::from_hex("70736274ff01009a020000000258e87a21b56daf0c23be8e7070456c336f7cbaa5c8757924f545887bb2abdd750000000000ffffffff838d0427d0ec650a68aa46bb0b098aea4422c071b2ca78352a077959d07cea1d0100000000ffffffff0270aaf00800000000160014d85c2b71d0060b09c9886aeb815e50991dda124d00e1f5050000000016001400aea9a2e5f0f876a588df5546e8742d1d87008f00000000000100bb0200000001aad73931018bd25f84ae400b68848be09db706eac2ac18298babee71ab656f8b0000000048473044022058f6fc7c6a33e1b31548d481c826c015bd30135aad42cd67790dab66d2ad243b02204a1ced2604c6735b6393e5b41691dd78b00f0c5942fb9f751856faa938157dba01feffffff0280f0fa020000000017a9140fb9463421696b82c833af241c78c17ddbde493487d0f20a270100000017a91429ca74f8a08f81999428185c97b5d852e4063f6187650000002202029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f473044022074018ad4180097b873323c0015720b3684cc8123891048e7dbcd9b55ad679c99022073d369b740e3eb53dcefa33823c8070514ca55a7dd9544f157c167913261118c01220202dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d7483045022100f61038b308dc1da865a34852746f015772934208c6d24454393cd99bdf2217770220056e675a675a6d0a02b85b14e5e29074d8a25a9b5760bea2816f661910a006ea01010304010000000104475221029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f2102dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d752ae2206029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f10d90c6a4f000000800000008000000080220602dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d710d90c6a4f0000008000000080010000800001012000c2eb0b0000000017a914b7f5faf40e3d40a5a459b1db3535f2b72fa921e887220203089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc473044022062eb7a556107a7c73f45ac4ab5a1dddf6f7075fb1275969a7f383efff784bcb202200c05dbb7470dbf2f08557dd356c7325c1ed30913e996cd3840945db12228da5f012202023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e73473044022065f45ba5998b59a27ffe1a7bed016af1f1f90d54b3aa8f7450aa5f56a25103bd02207f724703ad1edb96680b284b56d4ffcb88f7fb759eabbe08aa30f29b851383d2010103040100000001042200208c2353173743b595dfb4a07b72ba8e42e3797da74e87fe7d9d7497e3b2028903010547522103089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc21023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7352ae2206023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7310d90c6a4f000000800000008003000080220603089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc10d90c6a4f00000080000000800200008000220203a9a4c37f5996d3aa25dbac6b570af0650394492942460b354753ed9eeca5877110d90c6a4f000000800000008004000080002202027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b5005109610d90c6a4f00000080000000800500008000").unwrap()).unwrap();
 
         let secp = Secp256k1::verification_only();
-        psbt.finalize_mut(&secp).unwrap();
+        psbt.finalize_mut(&secp, Blockchain::Bitcoin).unwrap();
 
         let expected: bitcoin::util::psbt::PartiallySignedTransaction = deserialize(&Vec::<u8>::from_hex("70736274ff01009a020000000258e87a21b56daf0c23be8e7070456c336f7cbaa5c8757924f545887bb2abdd750000000000ffffffff838d0427d0ec650a68aa46bb0b098aea4422c071b2ca78352a077959d07cea1d0100000000ffffffff0270aaf00800000000160014d85c2b71d0060b09c9886aeb815e50991dda124d00e1f5050000000016001400aea9a2e5f0f876a588df5546e8742d1d87008f00000000000100bb0200000001aad73931018bd25f84ae400b68848be09db706eac2ac18298babee71ab656f8b0000000048473044022058f6fc7c6a33e1b31548d481c826c015bd30135aad42cd67790dab66d2ad243b02204a1ced2604c6735b6393e5b41691dd78b00f0c5942fb9f751856faa938157dba01feffffff0280f0fa020000000017a9140fb9463421696b82c833af241c78c17ddbde493487d0f20a270100000017a91429ca74f8a08f81999428185c97b5d852e4063f6187650000000107da00473044022074018ad4180097b873323c0015720b3684cc8123891048e7dbcd9b55ad679c99022073d369b740e3eb53dcefa33823c8070514ca55a7dd9544f157c167913261118c01483045022100f61038b308dc1da865a34852746f015772934208c6d24454393cd99bdf2217770220056e675a675a6d0a02b85b14e5e29074d8a25a9b5760bea2816f661910a006ea01475221029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f2102dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d752ae0001012000c2eb0b0000000017a914b7f5faf40e3d40a5a459b1db3535f2b72fa921e8870107232200208c2353173743b595dfb4a07b72ba8e42e3797da74e87fe7d9d7497e3b20289030108da0400473044022062eb7a556107a7c73f45ac4ab5a1dddf6f7075fb1275969a7f383efff784bcb202200c05dbb7470dbf2f08557dd356c7325c1ed30913e996cd3840945db12228da5f01473044022065f45ba5998b59a27ffe1a7bed016af1f1f90d54b3aa8f7450aa5f56a25103bd02207f724703ad1edb96680b284b56d4ffcb88f7fb759eabbe08aa30f29b851383d20147522103089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc21023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7352ae00220203a9a4c37f5996d3aa25dbac6b570af0650394492942460b354753ed9eeca5877110d90c6a4f000000800000008004000080002202027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b5005109610d90c6a4f00000080000000800500008000").unwrap()).unwrap();
         assert_eq!(psbt, expected);

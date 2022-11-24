@@ -15,6 +15,7 @@
 //! Example: Parsing a xpub and getting an address.
 
 use std::str::FromStr;
+use bitcoin::Blockchain;
 
 use miniscript::bitcoin::secp256k1::{Secp256k1, Verification};
 use miniscript::bitcoin::{Address, Network};
@@ -44,7 +45,7 @@ fn p2wsh<C: Verification>(secp: &Secp256k1<C>) -> Address {
         .unwrap()
         .derived_descriptor(&secp)
         .unwrap()
-        .address(Network::Bitcoin)
+        .address(Network::Bitcoin, Blockchain::Bitcoin)
         .unwrap();
 
     let expected = bitcoin::Address::from_str(
@@ -65,7 +66,7 @@ fn p2sh_p2wsh<C: Verification>(secp: &Secp256k1<C>) -> Address {
         .unwrap()
         .derived_descriptor(&secp, 5)
         .unwrap()
-        .address(Network::Bitcoin)
+        .address(Network::Bitcoin, Blockchain::Bitcoin)
         .unwrap();
 
     let expected = Address::from_str("325zcVBN5o2eqqqtGwPjmtDd8dJRyYP82s").unwrap();

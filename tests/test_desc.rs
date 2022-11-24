@@ -14,10 +14,7 @@ use bitcoin::util::psbt::PartiallySignedTransaction as Psbt;
 use bitcoin::util::sighash::SighashCache;
 use bitcoin::util::taproot::{LeafVersion, TapLeafHash};
 use bitcoin::util::{psbt, sighash};
-use bitcoin::{
-    self, secp256k1, Amount, LockTime, OutPoint, SchnorrSig, Script, Sequence, Transaction, TxIn,
-    TxOut, Txid,
-};
+use bitcoin::{self, secp256k1, Amount, LockTime, OutPoint, SchnorrSig, Script, Sequence, Transaction, TxIn, TxOut, Txid, Blockchain};
 use bitcoind::bitcoincore_rpc::{json, Client, RpcApi};
 use miniscript::psbt::{PsbtExt, PsbtInputExt};
 use miniscript::{Descriptor, Miniscript, ScriptContext, ToPublicKey};
@@ -88,7 +85,7 @@ pub fn test_desc_satisfy(
         .at_derivation_index(0);
 
     let derived_desc = definite_desc.derived_descriptor(&secp).unwrap();
-    let desc_address = derived_desc.address(bitcoin::Network::Regtest);
+    let desc_address = derived_desc.address(bitcoin::Network::Regtest, Blockchain::Bitcoin);
     let desc_address = desc_address.map_err(|_x| DescError::AddressComputationError)?;
 
     // Next send some btc to each address corresponding to the miniscript
@@ -120,7 +117,7 @@ pub fn test_desc_satisfy(
     };
     // figure out the outpoint from the txid
     let (outpoint, witness_utxo) =
-        get_vout(&cl, txid, btc(1.0).to_sat(), derived_desc.script_pubkey());
+        get_vout(&cl, txid, btc(1.0).to_sat(), derived_desc.script_pubkey(Blockchain::Bitcoin));
     let mut txin = TxIn::default();
     txin.previous_output = outpoint;
     // set the sequence to a non-final number for the locktime transactions to be
@@ -142,7 +139,7 @@ pub fn test_desc_satisfy(
     });
     let mut input = psbt::Input::default();
     input
-        .update_with_descriptor_unchecked(&definite_desc)
+        .update_with_descriptor_unchecked(&definite_desc, Blockchain::Bitcoin)
         .unwrap();
     input.witness_utxo = Some(witness_utxo.clone());
     psbt.inputs.push(input);
@@ -294,7 +291,7 @@ pub fn test_desc_satisfy(
     println!("Testing descriptor: {}", definite_desc);
     // Finalize the transaction using psbt
     // Let miniscript do it's magic!
-    if let Err(_) = psbt.finalize_mut(&secp) {
+    if let Err(_) = psbt.finalize_mut(&secp, Blockchain::Bitcoin) {
         return Err(DescError::PsbtFinalizeError);
     }
     let tx = psbt.extract(&secp).expect("Extraction error");

@@ -31,7 +31,7 @@ use bitcoin::util::bip32;
 use bitcoin::util::psbt::{self, PartiallySignedTransaction as Psbt};
 use bitcoin::util::sighash::SighashCache;
 use bitcoin::util::taproot::{self, ControlBlock, LeafVersion, TapLeafHash};
-use bitcoin::{self, EcdsaSighashType, LockTime, SchnorrSighashType, Script, Sequence};
+use bitcoin::{self, Blockchain, EcdsaSighashType, LockTime, SchnorrSighashType, Script, Sequence};
 
 use crate::miniscript::context::SigType;
 use crate::prelude::*;
@@ -478,6 +478,7 @@ pub trait PsbtExt {
     fn finalize_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<(), Vec<Error>>;
 
     /// Same as [`PsbtExt::finalize_mut`], but does not mutate the input psbt and
@@ -490,18 +491,21 @@ pub trait PsbtExt {
     fn finalize<C: secp256k1::Verification>(
         self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<Psbt, (Psbt, Vec<Error>)>;
 
     /// Same as [PsbtExt::finalize_mut], but allows for malleable satisfactions
     fn finalize_mall_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<(), Vec<Error>>;
 
     /// Same as [PsbtExt::finalize], but allows for malleable satisfactions
     fn finalize_mall<C: secp256k1::Verification>(
         self,
         secp: &Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<Psbt, (Psbt, Vec<Error>)>;
 
     /// Same as [`PsbtExt::finalize_mut`], but only tries to finalize a single input leaving other
@@ -514,6 +518,7 @@ pub trait PsbtExt {
     fn finalize_inp_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<(), Error>;
 
@@ -526,6 +531,7 @@ pub trait PsbtExt {
     fn finalize_inp<C: secp256k1::Verification>(
         self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<Psbt, (Psbt, Error)>;
 
@@ -533,6 +539,7 @@ pub trait PsbtExt {
     fn finalize_inp_mall_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<(), Error>;
 
@@ -540,6 +547,7 @@ pub trait PsbtExt {
     fn finalize_inp_mall<C: secp256k1::Verification>(
         self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<Psbt, (Psbt, Error)>;
 
@@ -575,6 +583,7 @@ pub trait PsbtExt {
         &mut self,
         input_index: usize,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<(), UtxoUpdateError>;
 
     /// Update PSBT output with a descriptor and check consistency of the output's `script_pubkey`
@@ -590,6 +599,7 @@ pub trait PsbtExt {
         &mut self,
         output_index: usize,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<(), OutputUpdateError>;
 
     /// Get the sighash message(data to sign) at input index `idx` based on the sighash
@@ -622,11 +632,12 @@ impl PsbtExt for Psbt {
     fn finalize_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<(), Vec<Error>> {
         // Actually construct the witnesses
         let mut errors = vec![];
         for index in 0..self.inputs.len() {
-            match finalizer::finalize_input(self, index, secp, /*allow_mall*/ false) {
+            match finalizer::finalize_input(self, index, secp, /*allow_mall*/ false, chain) {
                 Ok(..) => {}
                 Err(e) => {
                     errors.push(e);
@@ -643,8 +654,9 @@ impl PsbtExt for Psbt {
     fn finalize<C: secp256k1::Verification>(
         mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<Psbt, (Psbt, Vec<Error>)> {
-        match self.finalize_mut(secp) {
+        match self.finalize_mut(secp, chain) {
             Ok(..) => Ok(self),
             Err(e) => Err((self, e)),
         }
@@ -653,10 +665,11 @@ impl PsbtExt for Psbt {
     fn finalize_mall_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<(), Vec<Error>> {
         let mut errors = vec![];
         for index in 0..self.inputs.len() {
-            match finalizer::finalize_input(self, index, secp, /*allow_mall*/ true) {
+            match finalizer::finalize_input(self, index, secp, /*allow_mall*/ true, chain) {
                 Ok(..) => {}
                 Err(e) => {
                     errors.push(e);
@@ -673,8 +686,9 @@ impl PsbtExt for Psbt {
     fn finalize_mall<C: secp256k1::Verification>(
         mut self,
         secp: &Secp256k1<C>,
+        chain: Blockchain,
     ) -> Result<Psbt, (Psbt, Vec<Error>)> {
-        match self.finalize_mall_mut(secp) {
+        match self.finalize_mall_mut(secp, chain) {
             Ok(..) => Ok(self),
             Err(e) => Err((self, e)),
         }
@@ -683,6 +697,7 @@ impl PsbtExt for Psbt {
     fn finalize_inp_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<(), Error> {
         if index >= self.inputs.len() {
@@ -691,15 +706,16 @@ impl PsbtExt for Psbt {
                 index,
             });
         }
-        finalizer::finalize_input(self, index, secp, /*allow_mall*/ false)
+        finalizer::finalize_input(self, index, secp, /*allow_mall*/ false, chain)
     }
 
     fn finalize_inp<C: secp256k1::Verification>(
         mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<Psbt, (Psbt, Error)> {
-        match self.finalize_inp_mut(secp, index) {
+        match self.finalize_inp_mut(secp, chain, index) {
             Ok(..) => Ok(self),
             Err(e) => Err((self, e)),
         }
@@ -708,6 +724,7 @@ impl PsbtExt for Psbt {
     fn finalize_inp_mall_mut<C: secp256k1::Verification>(
         &mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<(), Error> {
         if index >= self.inputs.len() {
@@ -716,15 +733,16 @@ impl PsbtExt for Psbt {
                 index,
             });
         }
-        finalizer::finalize_input(self, index, secp, /*allow_mall*/ false)
+        finalizer::finalize_input(self, index, secp, /*allow_mall*/ false, chain)
     }
 
     fn finalize_inp_mall<C: secp256k1::Verification>(
         mut self,
         secp: &secp256k1::Secp256k1<C>,
+        chain: Blockchain,
         index: usize,
     ) -> Result<Psbt, (Psbt, Error)> {
-        match self.finalize_inp_mall_mut(secp, index) {
+        match self.finalize_inp_mall_mut(secp, chain, index) {
             Ok(..) => Ok(self),
             Err(e) => Err((self, e)),
         }
@@ -757,6 +775,7 @@ impl PsbtExt for Psbt {
         &mut self,
         input_index: usize,
         desc: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<(), UtxoUpdateError> {
         let n_inputs = self.inputs.len();
         let input = self
@@ -809,7 +828,7 @@ impl PsbtExt for Psbt {
         };
 
         let (_, spk_check_passed) =
-            update_item_with_descriptor_helper(input, desc, Some(&expected_spk))
+            update_item_with_descriptor_helper(input, desc, Some(&expected_spk), chain)
                 .map_err(UtxoUpdateError::DerivationError)?;
 
         if !spk_check_passed {
@@ -823,6 +842,7 @@ impl PsbtExt for Psbt {
         &mut self,
         output_index: usize,
         desc: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<(), OutputUpdateError> {
         let n_outputs = self.outputs.len();
         let output = self
@@ -836,7 +856,7 @@ impl PsbtExt for Psbt {
             .ok_or(OutputUpdateError::MissingTxOut)?;
 
         let (_, spk_check_passed) =
-            update_item_with_descriptor_helper(output, desc, Some(&txout.script_pubkey))
+            update_item_with_descriptor_helper(output, desc, Some(&txout.script_pubkey), chain)
                 .map_err(OutputUpdateError::DerivationError)?;
 
         if !spk_check_passed {
@@ -959,6 +979,7 @@ pub trait PsbtInputExt {
     fn update_with_descriptor_unchecked(
         &mut self,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<Descriptor<bitcoin::PublicKey>, descriptor::ConversionError>;
 }
 
@@ -966,8 +987,9 @@ impl PsbtInputExt for psbt::Input {
     fn update_with_descriptor_unchecked(
         &mut self,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<Descriptor<bitcoin::PublicKey>, descriptor::ConversionError> {
-        let (derived, _) = update_item_with_descriptor_helper(self, descriptor, None)?;
+        let (derived, _) = update_item_with_descriptor_helper(self, descriptor, None, chain)?;
         Ok(derived)
     }
 }
@@ -993,6 +1015,7 @@ pub trait PsbtOutputExt {
     fn update_with_descriptor_unchecked(
         &mut self,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<Descriptor<bitcoin::PublicKey>, descriptor::ConversionError>;
 }
 
@@ -1000,8 +1023,9 @@ impl PsbtOutputExt for psbt::Output {
     fn update_with_descriptor_unchecked(
         &mut self,
         descriptor: &Descriptor<DefiniteDescriptorKey>,
+        chain: Blockchain,
     ) -> Result<Descriptor<bitcoin::PublicKey>, descriptor::ConversionError> {
-        let (derived, _) = update_item_with_descriptor_helper(self, descriptor, None)?;
+        let (derived, _) = update_item_with_descriptor_helper(self, descriptor, None, chain)?;
         Ok(derived)
     }
 }
@@ -1129,6 +1153,7 @@ fn update_item_with_descriptor_helper<F: PsbtFields>(
     item: &mut F,
     descriptor: &Descriptor<DefiniteDescriptorKey>,
     check_script: Option<&Script>,
+    chain: Blockchain,
     // the return value is a tuple here since the two internal calls to it require different info.
     // One needs the derived descriptor and the other needs to know whether the script_pubkey check
     // failed.
@@ -1139,7 +1164,7 @@ fn update_item_with_descriptor_helper<F: PsbtFields>(
         let derived = descriptor.derived_descriptor(&secp)?;
 
         if let Some(check_script) = check_script {
-            if check_script != &derived.script_pubkey() {
+            if check_script != &derived.script_pubkey(chain) {
                 return Ok((derived, false));
             }
         }
@@ -1224,7 +1249,7 @@ fn update_item_with_descriptor_helper<F: PsbtFields>(
         let derived = descriptor.translate_pk(&mut bip32_derivation)?;
 
         if let Some(check_script) = check_script {
-            if check_script != &derived.script_pubkey() {
+            if check_script != &derived.script_pubkey(chain) {
                 return Ok((derived, false));
             }
         }
@@ -1238,9 +1263,9 @@ fn update_item_with_descriptor_helper<F: PsbtFields>(
                     *item.witness_script() = Some(wsh.inner_script());
                     *item.redeem_script() = Some(wsh.inner_script().to_v0_p2wsh());
                 }
-                descriptor::ShInner::Wpkh(..) => *item.redeem_script() = Some(sh.inner_script()),
+                descriptor::ShInner::Wpkh(..) => *item.redeem_script() = Some(sh.inner_script(chain)),
                 descriptor::ShInner::SortedMulti(_) | descriptor::ShInner::Ms(_) => {
-                    *item.redeem_script() = Some(sh.inner_script())
+                    *item.redeem_script() = Some(sh.inner_script(chain))
                 }
             },
             Descriptor::Wsh(wsh) => *item.witness_script() = Some(wsh.inner_script()),
@@ -1453,6 +1478,8 @@ mod tests {
     use super::*;
     use crate::Miniscript;
 
+    const CHAIN: Blockchain = Blockchain::Bitcoin;
+
     #[test]
     fn test_extract_bip174() {
         let psbt: bitcoin::util::psbt::PartiallySignedTransaction = deserialize(&Vec::<u8>::from_hex("70736274ff01009a020000000258e87a21b56daf0c23be8e7070456c336f7cbaa5c8757924f545887bb2abdd750000000000ffffffff838d0427d0ec650a68aa46bb0b098aea4422c071b2ca78352a077959d07cea1d0100000000ffffffff0270aaf00800000000160014d85c2b71d0060b09c9886aeb815e50991dda124d00e1f5050000000016001400aea9a2e5f0f876a588df5546e8742d1d87008f00000000000100bb0200000001aad73931018bd25f84ae400b68848be09db706eac2ac18298babee71ab656f8b0000000048473044022058f6fc7c6a33e1b31548d481c826c015bd30135aad42cd67790dab66d2ad243b02204a1ced2604c6735b6393e5b41691dd78b00f0c5942fb9f751856faa938157dba01feffffff0280f0fa020000000017a9140fb9463421696b82c833af241c78c17ddbde493487d0f20a270100000017a91429ca74f8a08f81999428185c97b5d852e4063f6187650000000107da00473044022074018ad4180097b873323c0015720b3684cc8123891048e7dbcd9b55ad679c99022073d369b740e3eb53dcefa33823c8070514ca55a7dd9544f157c167913261118c01483045022100f61038b308dc1da865a34852746f015772934208c6d24454393cd99bdf2217770220056e675a675a6d0a02b85b14e5e29074d8a25a9b5760bea2816f661910a006ea01475221029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f2102dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d752ae0001012000c2eb0b0000000017a914b7f5faf40e3d40a5a459b1db3535f2b72fa921e8870107232200208c2353173743b595dfb4a07b72ba8e42e3797da74e87fe7d9d7497e3b20289030108da0400473044022062eb7a556107a7c73f45ac4ab5a1dddf6f7075fb1275969a7f383efff784bcb202200c05dbb7470dbf2f08557dd356c7325c1ed30913e996cd3840945db12228da5f01473044022065f45ba5998b59a27ffe1a7bed016af1f1f90d54b3aa8f7450aa5f56a25103bd02207f724703ad1edb96680b284b56d4ffcb88f7fb759eabbe08aa30f29b851383d20147522103089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc21023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7352ae00220203a9a4c37f5996d3aa25dbac6b570af0650394492942460b354753ed9eeca5877110d90c6a4f000000800000008004000080002202027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b5005109610d90c6a4f00000080000000800500008000").unwrap()).unwrap();
@@ -1470,9 +1497,9 @@ mod tests {
         let desc = format!("tr([{}/86'/0'/0']xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ/0/0)", fingerprint);
         let desc = Descriptor::from_str(&desc).unwrap();
         let mut psbt_input = psbt::Input::default();
-        psbt_input.update_with_descriptor_unchecked(&desc).unwrap();
+        psbt_input.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
         let mut psbt_output = psbt::Output::default();
-        psbt_output.update_with_descriptor_unchecked(&desc).unwrap();
+        psbt_output.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
         let internal_key = XOnlyPublicKey::from_str(
             "cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115",
         )
@@ -1515,9 +1542,9 @@ mod tests {
         )
         .unwrap();
         let mut psbt_input = psbt::Input::default();
-        psbt_input.update_with_descriptor_unchecked(&desc).unwrap();
+        psbt_input.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
         let mut psbt_output = psbt::Output::default();
-        psbt_output.update_with_descriptor_unchecked(&desc).unwrap();
+        psbt_output.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
         assert_eq!(psbt_input.tap_internal_key, Some(internal_key));
         assert_eq!(
             psbt_input.tap_key_origins.get(&internal_key),
@@ -1612,15 +1639,15 @@ mod tests {
             let derived = Descriptor::<bitcoin::PublicKey>::from_str(&derived).unwrap();
 
             let mut psbt_input = psbt::Input::default();
-            psbt_input.update_with_descriptor_unchecked(&desc).unwrap();
+            psbt_input.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
 
             let mut psbt_output = psbt::Output::default();
-            psbt_output.update_with_descriptor_unchecked(&desc).unwrap();
+            psbt_output.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
 
             assert_eq!(expected_bip32, psbt_input.bip32_derivation);
             assert_eq!(
                 psbt_input.witness_script,
-                Some(derived.explicit_script().unwrap())
+                Some(derived.explicit_script(CHAIN).unwrap())
             );
 
             assert_eq!(psbt_output.bip32_derivation, psbt_input.bip32_derivation);
@@ -1635,16 +1662,16 @@ mod tests {
             let derived = Descriptor::<bitcoin::PublicKey>::from_str(&derived).unwrap();
 
             let mut psbt_input = psbt::Input::default();
-            psbt_input.update_with_descriptor_unchecked(&desc).unwrap();
+            psbt_input.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
 
             let mut psbt_output = psbt::Output::default();
-            psbt_output.update_with_descriptor_unchecked(&desc).unwrap();
+            psbt_output.update_with_descriptor_unchecked(&desc, CHAIN).unwrap();
 
             assert_eq!(psbt_input.bip32_derivation, expected_bip32);
             assert_eq!(psbt_input.witness_script, None);
             assert_eq!(
                 psbt_input.redeem_script,
-                Some(derived.explicit_script().unwrap())
+                Some(derived.explicit_script(CHAIN).unwrap())
             );
 
             assert_eq!(psbt_output.bip32_derivation, psbt_input.bip32_derivation);
@@ -1686,33 +1713,33 @@ mod tests {
 
         let mut psbt = Psbt::from_unsigned_tx(tx.clone()).unwrap();
         assert_eq!(
-            psbt.update_input_with_descriptor(0, &desc),
+            psbt.update_input_with_descriptor(0, &desc, CHAIN),
             Err(UtxoUpdateError::UtxoCheck),
             "neither *_utxo are not set"
         );
         psbt.inputs[0].witness_utxo = Some(non_witness_utxo.output[0].clone());
         assert_eq!(
-            psbt.update_input_with_descriptor(0, &desc),
+            psbt.update_input_with_descriptor(0, &desc, CHAIN),
             Ok(()),
             "witness_utxo is set which is ok"
         );
         psbt.inputs[0].non_witness_utxo = Some(non_witness_utxo.clone());
         assert_eq!(
-            psbt.update_input_with_descriptor(0, &desc),
+            psbt.update_input_with_descriptor(0, &desc, CHAIN),
             Ok(()),
             "matching non_witness_utxo"
         );
         non_witness_utxo.version = 0;
         psbt.inputs[0].non_witness_utxo = Some(non_witness_utxo.clone());
         assert_eq!(
-            psbt.update_input_with_descriptor(0, &desc),
+            psbt.update_input_with_descriptor(0, &desc, CHAIN),
             Err(UtxoUpdateError::UtxoCheck),
             "non_witness_utxo no longer matches"
         );
         psbt.inputs[0].non_witness_utxo = None;
         psbt.inputs[0].witness_utxo.as_mut().unwrap().script_pubkey = Script::default();
         assert_eq!(
-            psbt.update_input_with_descriptor(0, &desc),
+            psbt.update_input_with_descriptor(0, &desc, CHAIN),
             Err(UtxoUpdateError::MismatchedScriptPubkey),
             "non_witness_utxo no longer matches"
         );
@@ -1738,18 +1765,18 @@ mod tests {
 
         let mut psbt = Psbt::from_unsigned_tx(tx.clone()).unwrap();
         assert_eq!(
-            psbt.update_output_with_descriptor(1, &desc),
+            psbt.update_output_with_descriptor(1, &desc, CHAIN),
             Err(OutputUpdateError::IndexOutOfBounds(1, 1)),
             "output index doesn't exist"
         );
         assert_eq!(
-            psbt.update_output_with_descriptor(0, &desc),
+            psbt.update_output_with_descriptor(0, &desc, CHAIN),
             Ok(()),
             "script_pubkey should match"
         );
         psbt.unsigned_tx.output[0].script_pubkey = Script::default();
         assert_eq!(
-            psbt.update_output_with_descriptor(0, &desc),
+            psbt.update_output_with_descriptor(0, &desc, CHAIN),
             Err(OutputUpdateError::MismatchedScriptPubkey),
             "output script_pubkey no longer matches"
         );

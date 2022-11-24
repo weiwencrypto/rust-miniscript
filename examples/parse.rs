@@ -15,6 +15,7 @@
 //! Example: Parsing a descriptor from a string.
 
 use std::str::FromStr;
+use bitcoin::Blockchain;
 
 use miniscript::descriptor::DescriptorType;
 use miniscript::Descriptor;
@@ -33,7 +34,7 @@ fn main() {
     // Compute the script pubkey. As mentioned in the documentation, script_pubkey only fails
     // for Tr descriptors that don't have some pre-computed data.
     assert_eq!(
-        format!("{:x}", desc.script_pubkey()),
+        format!("{:x}", desc.script_pubkey(Blockchain::Bitcoin)),
         "0020daef16dd7c946a3e735a6e43310cb2ce33dfd14a04f76bf8241a16654cb2f0f9"
     );
 
@@ -53,7 +54,7 @@ fn main() {
     assert_eq!(
         format!(
             "{:x}",
-            desc.explicit_script()
+            desc.explicit_script(Blockchain::Bitcoin)
                 .expect("Wsh descriptors have inner scripts")
         ),
         "21020202020202020202020202020202020202020202020202020202020202020202ac"

@@ -21,7 +21,7 @@
 use core::fmt;
 
 use bitcoin::blockdata::script;
-use bitcoin::{Address, Network, Script};
+use bitcoin::{Address, Blockchain, Network, Script};
 
 use super::checksum::{self, verify_checksum};
 use super::{SortedMultiVec, Wpkh, Wsh};
@@ -239,54 +239,54 @@ impl<Pk: MiniscriptKey> Sh<Pk> {
 
 impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn script_pubkey(&self) -> Script {
+    pub fn script_pubkey(&self, chain: Blockchain) -> Script {
         match self.inner {
             ShInner::Wsh(ref wsh) => wsh.script_pubkey().to_p2sh(),
-            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey().to_p2sh(),
+            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey(chain).to_p2sh(),
             ShInner::SortedMulti(ref smv) => smv.encode().to_p2sh(),
             ShInner::Ms(ref ms) => ms.encode().to_p2sh(),
         }
     }
 
     /// Obtains the corresponding address for this descriptor.
-    pub fn address(&self, network: Network) -> Address {
-        let addr = self.address_fallible(network);
+    pub fn address(&self, network: Network, chain: Blockchain) -> Address {
+        let addr = self.address_fallible(network, chain);
 
         // Size is checked in `check_global_consensus_validity`.
         assert!(addr.is_ok());
         addr.expect("only fails if size > MAX_SCRIPT_ELEMENT_SIZE")
     }
 
-    fn address_fallible(&self, network: Network) -> Result<Address, Error> {
+    fn address_fallible(&self, network: Network, chain: Blockchain) -> Result<Address, Error> {
         let script = match self.inner {
             ShInner::Wsh(ref wsh) => wsh.script_pubkey(),
-            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey(),
+            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey(chain),
             ShInner::SortedMulti(ref smv) => smv.encode(),
             ShInner::Ms(ref ms) => ms.encode(),
         };
-        let address = Address::p2sh(&script, network)?;
+        let address = Address::p2sh(&script, network, chain)?;
 
         Ok(address)
     }
 
     /// Obtain the underlying miniscript for this descriptor
-    pub fn inner_script(&self) -> Script {
+    pub fn inner_script(&self, chain: Blockchain) -> Script {
         match self.inner {
             ShInner::Wsh(ref wsh) => wsh.inner_script(),
-            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey(),
+            ShInner::Wpkh(ref wpkh) => wpkh.script_pubkey(chain),
             ShInner::SortedMulti(ref smv) => smv.encode(),
             ShInner::Ms(ref ms) => ms.encode(),
         }
     }
 
     /// Obtains the pre bip-340 signature script code for this descriptor.
-    pub fn ecdsa_sighash_script_code(&self) -> Script {
+    pub fn ecdsa_sighash_script_code(&self, chain: Blockchain) -> Script {
         match self.inner {
             //     - For P2WSH witness program, if the witnessScript does not contain any `OP_CODESEPARATOR`,
             //       the `scriptCode` is the `witnessScript` serialized as scripts inside CTxOut.
             ShInner::Wsh(ref wsh) => wsh.ecdsa_sighash_script_code(),
             ShInner::SortedMulti(ref smv) => smv.encode(),
-            ShInner::Wpkh(ref wpkh) => wpkh.ecdsa_sighash_script_code(),
+            ShInner::Wpkh(ref wpkh) => wpkh.ecdsa_sighash_script_code(chain),
             // For "legacy" P2SH outputs, it is defined as the txo's redeemScript.
             ShInner::Ms(ref ms) => ms.encode(),
         }
@@ -299,7 +299,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
     /// This is used in Segwit transactions to produce an unsigned transaction
     /// whose txid will not change during signing (since only the witness data
     /// will change).
-    pub fn unsigned_script_sig(&self) -> Script {
+    pub fn unsigned_script_sig(&self, chain: Blockchain) -> Script {
         match self.inner {
             ShInner::Wsh(ref wsh) => {
                 // wsh explicit must contain exactly 1 element
@@ -309,7 +309,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
                     .into_script()
             }
             ShInner::Wpkh(ref wpkh) => {
-                let redeem_script = wpkh.script_pubkey();
+                let redeem_script = wpkh.script_pubkey(chain);
                 script::Builder::new()
                     .push_slice(&redeem_script[..])
                     .into_script()
@@ -321,11 +321,11 @@ impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
     /// Returns satisfying non-malleable witness and scriptSig with minimum
     /// weight to spend an output controlled by the given descriptor if it is
     /// possible to construct one using the `satisfier`.
-    pub fn get_satisfaction<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
+    pub fn get_satisfaction<S>(&self, satisfier: S, chain: Blockchain) -> Result<(Vec<Vec<u8>>, Script), Error>
     where
         S: Satisfier<Pk>,
     {
-        let script_sig = self.unsigned_script_sig();
+        let script_sig = self.unsigned_script_sig(chain);
         match self.inner {
             ShInner::Wsh(ref wsh) => {
                 let (witness, _) = wsh.get_satisfaction(satisfier)?;
@@ -355,11 +355,11 @@ impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
     /// Returns satisfying, possibly malleable, witness and scriptSig with
     /// minimum weight to spend an output controlled by the given descriptor if
     /// it is possible to construct one using the `satisfier`.
-    pub fn get_satisfaction_mall<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
+    pub fn get_satisfaction_mall<S>(&self, satisfier: S, chain: Blockchain) -> Result<(Vec<Vec<u8>>, Script), Error>
     where
         S: Satisfier<Pk>,
     {
-        let script_sig = self.unsigned_script_sig();
+        let script_sig = self.unsigned_script_sig(chain);
         match self.inner {
             ShInner::Wsh(ref wsh) => {
                 let (witness, _) = wsh.get_satisfaction_mall(satisfier)?;
@@ -372,7 +372,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Sh<Pk> {
                 let witness = vec![];
                 Ok((witness, script_sig))
             }
-            _ => self.get_satisfaction(satisfier),
+            _ => self.get_satisfaction(satisfier, chain),
         }
     }
 }

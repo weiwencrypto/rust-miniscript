@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use bitcoin::blockdata::witness::Witness;
-use bitcoin::{secp256k1, PackedLockTime, Sequence};
+use bitcoin::{secp256k1, PackedLockTime, Sequence, Blockchain};
 
 fn main() {
     let mut tx = spending_transaction();
@@ -42,7 +42,7 @@ fn main() {
 
     // Observe the script properties, just for fun.
     assert_eq!(
-        format!("{:x}", descriptor.script_pubkey()),
+        format!("{:x}", descriptor.script_pubkey(Blockchain::Bitcoin)),
         "00200ed49b334a12c37f3df8a2974ad91ff95029215a2b53f78155be737907f06163"
     );
 
@@ -50,7 +50,7 @@ fn main() {
         format!(
             "{:x}",
             descriptor
-                .explicit_script()
+                .explicit_script(Blockchain::Bitcoin)
                 .expect("wsh descriptors have unique inner script")
         ),
         "52\
@@ -66,23 +66,23 @@ fn main() {
     let mut sigs = HashMap::<bitcoin::PublicKey, miniscript::bitcoin::EcdsaSig>::new();
 
     // Doesn't work with no signatures.
-    assert!(descriptor.satisfy(&mut tx.input[0], &sigs).is_err());
+    assert!(descriptor.satisfy(&mut tx.input[0], &sigs, Blockchain::Bitcoin).is_err());
     assert_eq!(tx.input[0], original_txin);
 
     // ...or one signature...
     sigs.insert(pks[1], sig);
-    assert!(descriptor.satisfy(&mut tx.input[0], &sigs).is_err());
+    assert!(descriptor.satisfy(&mut tx.input[0], &sigs, Blockchain::Bitcoin).is_err());
     assert_eq!(tx.input[0], original_txin);
 
     // ...but two signatures is ok.
     sigs.insert(pks[2], sig);
-    assert!(descriptor.satisfy(&mut tx.input[0], &sigs).is_ok());
+    assert!(descriptor.satisfy(&mut tx.input[0], &sigs, Blockchain::Bitcoin).is_ok());
     assert_ne!(tx.input[0], original_txin);
     assert_eq!(tx.input[0].witness.len(), 4); // 0, sig, sig, witness script
 
     // ...and even if we give it a third signature, only two are used.
     sigs.insert(pks[0], sig);
-    assert!(descriptor.satisfy(&mut tx.input[0], &sigs).is_ok());
+    assert!(descriptor.satisfy(&mut tx.input[0], &sigs, Blockchain::Bitcoin).is_ok());
     assert_ne!(tx.input[0], original_txin);
     assert_eq!(tx.input[0].witness.len(), 4); // 0, sig, sig, witness script
 }

@@ -18,19 +18,21 @@
 
 use core::fmt;
 
-use bitcoin::{self, Address, Network, Script};
+use bitcoin::{self, Address, Blockchain, Network, Script};
 
-use super::checksum::{self, verify_checksum};
-use super::SortedMultiVec;
-use crate::expression::{self, FromTree};
-use crate::miniscript::context::{ScriptContext, ScriptContextError};
-use crate::policy::{semantic, Liftable};
-use crate::prelude::*;
-use crate::util::varint_len;
 use crate::{
     Error, ForEachKey, Miniscript, MiniscriptKey, Satisfier, Segwitv0, ToPublicKey, TranslatePk,
     Translator,
 };
+use crate::expression::{self, FromTree};
+use crate::miniscript::context::{ScriptContext, ScriptContextError};
+use crate::policy::{Liftable, semantic};
+use crate::prelude::*;
+use crate::util::varint_len;
+
+use super::checksum::{self, verify_checksum};
+use super::SortedMultiVec;
+
 /// A Segwitv0 wsh descriptor
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct Wsh<Pk: MiniscriptKey> {
@@ -119,10 +121,10 @@ impl<Pk: MiniscriptKey + ToPublicKey> Wsh<Pk> {
     }
 
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn address(&self, network: Network) -> Address {
+    pub fn address(&self, network: Network, chain: Blockchain) -> Address {
         match self.inner {
-            WshInner::SortedMulti(ref smv) => Address::p2wsh(&smv.encode(), network),
-            WshInner::Ms(ref ms) => Address::p2wsh(&ms.encode(), network),
+            WshInner::SortedMulti(ref smv) => Address::p2wsh(&smv.encode(), network, chain),
+            WshInner::Ms(ref ms) => Address::p2wsh(&ms.encode(), network, chain),
         }
     }
 
@@ -143,8 +145,8 @@ impl<Pk: MiniscriptKey + ToPublicKey> Wsh<Pk> {
     /// weight to spend an output controlled by the given descriptor if it is
     /// possible to construct one using the `satisfier`.
     pub fn get_satisfaction<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
-    where
-        S: Satisfier<Pk>,
+        where
+            S: Satisfier<Pk>,
     {
         let mut witness = match self.inner {
             WshInner::SortedMulti(ref smv) => smv.satisfy(satisfier)?,
@@ -160,8 +162,8 @@ impl<Pk: MiniscriptKey + ToPublicKey> Wsh<Pk> {
     /// minimum weight to spend an output controlled by the given descriptor if
     /// it is possible to construct one using the `satisfier`.
     pub fn get_satisfaction_mall<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
-    where
-        S: Satisfier<Pk>,
+        where
+            S: Satisfier<Pk>,
     {
         let mut witness = match self.inner {
             WshInner::SortedMulti(ref smv) => smv.satisfy(satisfier)?,
@@ -249,8 +251,8 @@ impl_from_str!(
 
 impl<Pk: MiniscriptKey> ForEachKey<Pk> for Wsh<Pk> {
     fn for_each_key<'a, F: FnMut(&'a Pk) -> bool>(&'a self, pred: F) -> bool
-    where
-        Pk: 'a,
+        where
+            Pk: 'a,
     {
         match self.inner {
             WshInner::SortedMulti(ref smv) => smv.for_each_key(pred),
@@ -260,15 +262,15 @@ impl<Pk: MiniscriptKey> ForEachKey<Pk> for Wsh<Pk> {
 }
 
 impl<P, Q> TranslatePk<P, Q> for Wsh<P>
-where
-    P: MiniscriptKey,
-    Q: MiniscriptKey,
+    where
+        P: MiniscriptKey,
+        Q: MiniscriptKey,
 {
     type Output = Wsh<Q>;
 
     fn translate_pk<T, E>(&self, t: &mut T) -> Result<Self::Output, E>
-    where
-        T: Translator<P, Q, E>,
+        where
+            T: Translator<P, Q, E>,
     {
         let inner = match self.inner {
             WshInner::SortedMulti(ref smv) => WshInner::SortedMulti(smv.translate_pk(t)?),
@@ -338,30 +340,30 @@ impl<Pk: MiniscriptKey> Wpkh<Pk> {
 
 impl<Pk: MiniscriptKey + ToPublicKey> Wpkh<Pk> {
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn script_pubkey(&self) -> Script {
-        let addr = Address::p2wpkh(&self.pk.to_public_key(), Network::Bitcoin)
+    pub fn script_pubkey(&self, chain: Blockchain) -> Script {
+        let addr = Address::p2wpkh(&self.pk.to_public_key(), Network::Bitcoin, chain)
             .expect("wpkh descriptors have compressed keys");
         addr.script_pubkey()
     }
 
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn address(&self, network: Network) -> Address {
-        Address::p2wpkh(&self.pk.to_public_key(), network)
+    pub fn address(&self, network: Network, chain: Blockchain) -> Address {
+        Address::p2wpkh(&self.pk.to_public_key(), network, chain)
             .expect("Rust Miniscript types don't allow uncompressed pks in segwit descriptors")
     }
 
     /// Obtains the underlying miniscript for this descriptor.
-    pub fn inner_script(&self) -> Script {
-        self.script_pubkey()
+    pub fn inner_script(&self, chain: Blockchain) -> Script {
+        self.script_pubkey(chain)
     }
 
     /// Obtains the pre bip-340 signature script code for this descriptor.
-    pub fn ecdsa_sighash_script_code(&self) -> Script {
+    pub fn ecdsa_sighash_script_code(&self, chain: Blockchain) -> Script {
         // For SegWit outputs, it is defined by bip-0143 (quoted below) and is different from
         // the previous txo's scriptPubKey.
         // The item 5:
         //     - For P2WPKH witness program, the scriptCode is `0x1976a914{20-byte-pubkey-hash}88ac`.
-        let addr = Address::p2pkh(&self.pk.to_public_key(), Network::Bitcoin);
+        let addr = Address::p2pkh(&self.pk.to_public_key(), Network::Bitcoin, chain);
         addr.script_pubkey()
     }
 
@@ -369,8 +371,8 @@ impl<Pk: MiniscriptKey + ToPublicKey> Wpkh<Pk> {
     /// weight to spend an output controlled by the given descriptor if it is
     /// possible to construct one using the `satisfier`.
     pub fn get_satisfaction<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
-    where
-        S: Satisfier<Pk>,
+        where
+            S: Satisfier<Pk>,
     {
         if let Some(sig) = satisfier.lookup_ecdsa_sig(&self.pk) {
             let sig_vec = sig.to_vec();
@@ -386,8 +388,8 @@ impl<Pk: MiniscriptKey + ToPublicKey> Wpkh<Pk> {
     /// minimum weight to spend an output controlled by the given descriptor if
     /// it is possible to construct one using the `satisfier`.
     pub fn get_satisfaction_mall<S>(&self, satisfier: S) -> Result<(Vec<Vec<u8>>, Script), Error>
-    where
-        S: Satisfier<Pk>,
+        where
+            S: Satisfier<Pk>,
     {
         self.get_satisfaction(satisfier)
     }
@@ -443,23 +445,23 @@ impl_from_str!(
 
 impl<Pk: MiniscriptKey> ForEachKey<Pk> for Wpkh<Pk> {
     fn for_each_key<'a, F: FnMut(&'a Pk) -> bool>(&'a self, mut pred: F) -> bool
-    where
-        Pk: 'a,
+        where
+            Pk: 'a,
     {
         pred(&self.pk)
     }
 }
 
 impl<P, Q> TranslatePk<P, Q> for Wpkh<P>
-where
-    P: MiniscriptKey,
-    Q: MiniscriptKey,
+    where
+        P: MiniscriptKey,
+        Q: MiniscriptKey,
 {
     type Output = Wpkh<Q>;
 
     fn translate_pk<T, E>(&self, t: &mut T) -> Result<Self::Output, E>
-    where
-        T: Translator<P, Q, E>,
+        where
+            T: Translator<P, Q, E>,
     {
         Ok(Wpkh::new(t.pk(&self.pk)?).expect("Uncompressed keys in Wpkh"))
     }

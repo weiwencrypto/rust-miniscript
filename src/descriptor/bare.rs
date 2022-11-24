@@ -21,7 +21,7 @@
 use core::fmt;
 
 use bitcoin::blockdata::script;
-use bitcoin::{Address, Network, Script};
+use bitcoin::{Address, Blockchain, Network, Script};
 
 use super::checksum::{self, verify_checksum};
 use crate::expression::{self, FromTree};
@@ -225,26 +225,26 @@ impl<Pk: MiniscriptKey> Pkh<Pk> {
 
 impl<Pk: MiniscriptKey + ToPublicKey> Pkh<Pk> {
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn script_pubkey(&self) -> Script {
+    pub fn script_pubkey(&self, chain: Blockchain) -> Script {
         // Fine to hard code the `Network` here because we immediately call
         // `script_pubkey` which does not use the `network` field of `Address`.
-        let addr = self.address(Network::Bitcoin);
+        let addr = self.address(Network::Bitcoin, chain);
         addr.script_pubkey()
     }
 
     /// Obtains the corresponding script pubkey for this descriptor.
-    pub fn address(&self, network: Network) -> Address {
-        Address::p2pkh(&self.pk.to_public_key(), network)
+    pub fn address(&self, network: Network, chain: Blockchain) -> Address {
+        Address::p2pkh(&self.pk.to_public_key(), network, chain)
     }
 
     /// Obtains the underlying miniscript for this descriptor.
-    pub fn inner_script(&self) -> Script {
-        self.script_pubkey()
+    pub fn inner_script(&self, chain: Blockchain) -> Script {
+        self.script_pubkey(chain)
     }
 
     /// Obtains the pre bip-340 signature script code for this descriptor.
-    pub fn ecdsa_sighash_script_code(&self) -> Script {
-        self.script_pubkey()
+    pub fn ecdsa_sighash_script_code(&self, chain: Blockchain) -> Script {
+        self.script_pubkey(chain)
     }
 
     /// Returns satisfying non-malleable witness and scriptSig with minimum

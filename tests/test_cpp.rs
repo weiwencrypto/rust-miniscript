@@ -13,7 +13,7 @@ use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::secp256k1::{self, Secp256k1};
 use bitcoin::util::psbt;
 use bitcoin::util::psbt::PartiallySignedTransaction as Psbt;
-use bitcoin::{self, Amount, LockTime, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid};
+use bitcoin::{self, Amount, LockTime, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid, Blockchain};
 use bitcoind::bitcoincore_rpc::{json, Client, RpcApi};
 use miniscript::psbt::PsbtExt;
 use miniscript::Descriptor;
@@ -85,7 +85,7 @@ pub fn test_from_cpp_ms(cl: &Client, testdata: &TestData) {
     for wsh in desc_vec.iter() {
         let txid = cl
             .send_to_address(
-                &wsh.address(bitcoin::Network::Regtest).unwrap(),
+                &wsh.address(bitcoin::Network::Regtest, Blockchain::Bitcoin).unwrap(),
                 btc(1),
                 None,
                 None,
@@ -143,7 +143,7 @@ pub fn test_from_cpp_ms(cl: &Client, testdata: &TestData) {
         });
         let mut input = psbt::Input::default();
         input.witness_utxo = Some(witness_utxo);
-        input.witness_script = Some(desc.explicit_script().unwrap());
+        input.witness_script = Some(desc.explicit_script(Blockchain::Bitcoin).unwrap());
         psbt.inputs.push(input);
         psbt.outputs.push(psbt::Output::default());
         psbts.push(psbt);
@@ -210,7 +210,7 @@ pub fn test_from_cpp_ms(cl: &Client, testdata: &TestData) {
         );
         // Finalize the transaction using psbt
         // Let miniscript do it's magic!
-        if let Err(e) = psbts[i].finalize_mall_mut(&secp) {
+        if let Err(e) = psbts[i].finalize_mall_mut(&secp, Blockchain::Bitcoin) {
             // All miniscripts should satisfy
             panic!("Could not satisfy: error{} ms:{} at ind:{}", e[0], ms, i);
         } else {
